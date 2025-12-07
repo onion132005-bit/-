@@ -55,7 +55,17 @@ local function isAlly(player)
     
     return success and result or false
 end
+local function IsPirateTeam(player)
+    if not player.Team then return false end
+    local teamName = player.Team.Name:lower()
+    return teamName:find("pirate") or teamName:find("โจร")
+end
 
+local function IsMarineTeam(player)
+    if not player.Team then return false end
+    local teamName = player.Team.Name:lower()
+    return teamName:find("marine") or teamName:find("navy")
+end
 local function findNearestTarget()
     local Character = LocalPlayer.Character
     if not Character or not Character:FindFirstChild("HumanoidRootPart") then return nil end
@@ -69,12 +79,28 @@ local function findNearestTarget()
             local root = player.Character:FindFirstChild("HumanoidRootPart")
             local hum = player.Character:FindFirstChild("Humanoid")
             
-            -- ตรวจสอบ: ไม่ใช่ NPC, มี HP, ไม่ใช่ Ally เท่านั้น
-            if root and hum and hum.Health > 0 and player.UserId > 0 and not isAlly(player) and player.Parent == Players then
-                local dist = (HumanoidRootPart.Position - root.Position).Magnitude
-                if dist < shortestDist then
-                    shortestDist = dist
-                    nearestPlayer = player
+            if root and hum and hum.Health > 0 and player.UserId > 0 then
+                -- เช็คทีม: ถ้าเราเป็น Marine ห้ามล็อค Marine ด้วยกัน
+                local canTarget = true
+                if LocalPlayer.Team and player.Team then
+                    if IsMarineTeam(LocalPlayer) and IsMarineTeam(player) then
+                        canTarget = false -- Marine ห้ามล็อค Marine
+                    end
+                end
+                
+                -- ถ้าเป็นโจร ยังคงเช็ค Ally ตามเดิม
+                if IsPirateTeam(LocalPlayer) and isAlly(player) then
+                    canTarget = false
+                end
+                
+                if canTarget then
+                    local dist = (HumanoidRootPart.Position - root.Position).Magnitude
+                    if dist < shortestDist then
+                        if player.Parent == Players then
+                            shortestDist = dist
+                            nearestPlayer = player
+                        end
+                    end
                 end
             end
         end
@@ -156,14 +182,16 @@ end
 spawn(function()
     while wait(0.02) do
         if _G.Skillaimbot then
-            -- หาคนที่ใกล้ที่สุดทุกครั้ง
-            local nearestTarget = findNearestTarget()
-            
-            -- ถ้าเจอคนใหม่ที่ใกล้กว่า หรือคนเก่าไม่ valid แล้ว
-            if nearestTarget ~= lockedTarget then
-                lockedTarget = nearestTarget
-                lastTargetPos = nil
-                targetVelocity = Vector3.new(0, 0, 0)
+            if not isTargetValid(lockedTarget) then
+                local newTarget = findNearestTarget()
+                if newTarget and newTarget ~= lockedTarget then
+                    lockedTarget = newTarget
+                    lastTargetPos = nil
+                    targetVelocity = Vector3.new(0, 0, 0)
+                elseif not newTarget and lockedTarget then
+                    lockedTarget = nil
+                    lastTargetPos = nil
+                end
             end
             
             if lockedTarget and isTargetValid(lockedTarget) then
@@ -231,30 +259,14 @@ spawn(function()
     setreadonly(gg, true)
 end)
 
-local function IsPirateTeam(player)
-    if not player.Team then return false end
-    local teamName = player.Team.Name:lower()
-    return teamName:find("pirate") or teamName:find("โจร")
-end
 
-local function IsMarineTeam(player)
-    if not player.Team then return false end
-    local teamName = player.Team.Name:lower()
-    return teamName:find("marine") or teamName:find("navy")
-end
 
 local function CreateESP(player)
     if player == LocalPlayer then return end
     
     -- เช็คว่าผู้เล่นมีทีมหรือไม่ ถ้าไม่มีทีมไม่แสดง ESP
-    if not player.Team or (not IsPirateTeam(player) and not IsMarineTeam(player)) then
+    if not player.Team or not IsPirateTeam(player) and not IsMarineTeam(player) then
         return
-    end
-    
-    -- เช็คว่า ESP มีอยู่แล้วหรือไม่
-    local existingESP = ESPFolder:FindFirstChild("ESP_" .. player.Name)
-    if existingESP then
-        existingESP:Destroy()
     end
     
     local ESPBox = Instance.new("BillboardGui")
@@ -362,9 +374,9 @@ local function CreateESP(player)
                     TeamLabel.Text = "MARINE"
                     TeamLabel.TextColor3 = Color3.fromRGB(0, 150, 255)
                 else
-                    -- ถ้าไม่มีทีม ซ่อน ESP
-                    ESPBox.Adornee = nil
-                    return
+                    NameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    TeamLabel.Text = "No Team"
+                    TeamLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
                 end
                 
                 if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
@@ -379,7 +391,19 @@ local function CreateESP(player)
         end
     end)
 end
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        if _G.ESPEnabled then
+            task.wait(1)
+            CreateESP(player)
+        end
+    end)
+end)
 
+Players.PlayerRemoving:Connect(function(player)
+    local old = ESPFolder:FindFirstChild("ESP_" .. player.Name)
+    if old then old:Destroy() end
+end)
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "Onion13Hub"
 ScreenGui.Parent = game.CoreGui
@@ -626,6 +650,7 @@ end)
 
 createToggleButton("ESP", "👁️", function(enabled)
     _G.ESPEnabled = enabled
+    
     if enabled then
         for _, player in pairs(Players:GetPlayers()) do
             if player ~= LocalPlayer then
@@ -638,6 +663,7 @@ createToggleButton("ESP", "👁️", function(enabled)
         end
     end
 end)
+
 
 createSlider("Speed", 1, 12, 1, function(value)
     _G.SpeedValue = value
@@ -654,11 +680,9 @@ end)
 createToggleButton("Auto V4", "⭐", function(enabled)
     _G.AutoV4 = enabled
 end)
-
 createToggleButton("Anti-Stun", "🛡️", function(enabled)
     _G.AntiStun = enabled
 end)
-
 local JumpButton = Instance.new("TextButton")
 JumpButton.Name = "JumpButton"
 JumpButton.Size = UDim2.new(0, 85, 0, 85)
@@ -896,8 +920,6 @@ spawn(function()
         end
     end
 end)
-
--- Anti-Stun Loop
 spawn(function()
     while wait(0.01) do
         if _G.AntiStun then
@@ -913,10 +935,9 @@ spawn(function()
         end
     end
 end)
-
 Players.PlayerAdded:Connect(function(player)
-    wait(1)
     if _G.ESPEnabled then
+        wait(1)
         CreateESP(player)
     end
 end)
@@ -927,22 +948,6 @@ Players.PlayerRemoving:Connect(function(player)
         esp:Destroy()
     end
 end)
-
--- อัปเดต ESP เมื่อผู้เล่นเปลี่ยนทีม
-for _, player in pairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        player:GetPropertyChangedSignal("Team"):Connect(function()
-            if _G.ESPEnabled then
-                local esp = ESPFolder:FindFirstChild("ESP_" .. player.Name)
-                if esp then
-                    esp:Destroy()
-                end
-                wait(0.1)
-                CreateESP(player)
-            end
-        end)
-    end
-end
 
 UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
     ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 10)
@@ -959,3 +964,10 @@ Credit.Font = Enum.Font.GothamBold
 Credit.TextStrokeTransparency = 0.3
 Credit.Parent = ScreenGui
 
+print("🧅 Onion13 Hub - Auto Prediction Version!")
+print("✅ Prediction Slider ถูกลบออกแล้ว")
+print("🎯 Aimbot คำนวณ Prediction อัตโนมัติตามระยะทาง!")
+print("📏 ระยะใกล้ (0-100m) = 1% Prediction")
+print("📏 ระยะกลาง (100-350m) = 2-4% Prediction")
+print("📏 ระยะไกล (350-500m+) = 6-8% Prediction")
+print("⚡ ตึงและแม่นขึ้นอัตโนมัติ!")
